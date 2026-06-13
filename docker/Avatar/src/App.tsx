@@ -3,6 +3,7 @@ import { playAudio } from './audio/playAudio'
 import { GuideAvatar } from './components/GuideAvatar'
 import { askAgent } from './services/agentService'
 import { requestTtsAudio, speakWithBrowser } from './services/ttsService'
+import { fetchVoiceOutput, requestVoiceOutputAudio } from './services/voiceGenService'
 
 type Question = {
   id: string
@@ -38,6 +39,7 @@ const questions: Question[] = [
 ]
 
 const initialHint = 'Hallo, ich bin der digitale Vereinsguide.'
+const voicePollIntervalMs = 2500
 
 function App() {
   const [isTalking, setIsTalking] = useState(false)
@@ -46,6 +48,8 @@ function App() {
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null)
   const requestIdRef = useRef(0)
   const fallbackStopTimerRef = useRef<number | null>(null)
+  const latestVoiceTextRef = useRef('')
+  const voicePollBusyRef = useRef(false)
 
   const clearFallbackStopTimer = useCallback(() => {
     if (fallbackStopTimerRef.current) {
@@ -118,6 +122,47 @@ function App() {
     [clearFallbackStopTimer, stopTalking],
   )
 
+  const playLatestVoiceOutput = useCallback(
+    async (text: string) => {
+      const requestId = requestIdRef.current + 1
+      requestIdRef.current = requestId
+
+      window.speechSynthesis?.cancel()
+      clearFallbackStopTimer()
+      setIsTalking(false)
+      setIsLoading(true)
+      setActiveQuestionId(null)
+      setActiveHint('Neue Voice-Ausgabe erkannt')
+
+      const voiceAudio = await requestVoiceOutputAudio()
+      if (requestIdRef.current !== requestId) {
+        return false
+      }
+
+      if (!voiceAudio) {
+        stopTalking(requestId)
+        return false
+      }
+
+      setIsTalking(true)
+      setIsLoading(false)
+      setActiveHint(text)
+
+      try {
+        await playAudio(voiceAudio, {
+          onEnd: () => stopTalking(requestId),
+        })
+        return true
+      } catch {
+        if (requestIdRef.current === requestId) {
+          stopTalking(requestId)
+        }
+        return false
+      }
+    },
+    [clearFallbackStopTimer, stopTalking],
+  )
+
   const handleMicClick = () => {
     requestIdRef.current += 1
     window.speechSynthesis?.cancel()
@@ -127,6 +172,52 @@ function App() {
     setActiveQuestionId(null)
     setActiveHint('Sprachsteuerung kommt im naechsten Prototyp.')
   }
+
+  useEffect(() => {
+    let cancelled = false
+
+    const pollVoiceOutput = async () => {
+      if (cancelled || isLoading || isTalking || voicePollBusyRef.current) {
+        return
+      }
+
+      voicePollBusyRef.current = true
+      try {
+        const output = await fetchVoiceOutput()
+        if (cancelled) {
+          return
+        }
+
+        if (!output) {
+          return
+        }
+
+        const text = output.text.trim()
+        if (!text || text === latestVoiceTextRef.current) {
+          return
+        }
+
+        // Mark text as handled before playback to avoid rapid duplicate retries.
+        latestVoiceTextRef.current = text
+        const didPlay = await playLatestVoiceOutput(text)
+        if (!didPlay && !cancelled) {
+          setActiveHint('Audio blocked or unavailable. Click once to enable sound.')
+        }
+      } finally {
+        voicePollBusyRef.current = false
+      }
+    }
+
+    const intervalId = window.setInterval(() => {
+      void pollVoiceOutput()
+    }, voicePollIntervalMs)
+    void pollVoiceOutput()
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [isLoading, isTalking, playLatestVoiceOutput])
 
   useEffect(() => {
     return () => {
