@@ -1,6 +1,6 @@
 services:
   stt-service:
-    build: ./stt-service
+    build: stt-service
     ports:
       - "8001:8001"
     environment:
