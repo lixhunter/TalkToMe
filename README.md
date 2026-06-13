@@ -14,3 +14,15 @@ How can people interact intuitively with digital systems? Develop a voice-contro
 **Your Challenge**
 
 Develop an interactive, voice-controlled avatar that responds to users, conveys information, and creates an immersive experience. The focus is on natural language interaction, real-time feedback, and an innovative and intuitive user experience for use as a digital exhibit in the Hub.
+
+## Quick Start (Web Avatar)
+
+1. Place your Rive file in this folder as one of these names:
+- `20617-38809-chat-bot.riv` (preferred)
+- `avatar.riv` (fallback)
+2. Start a local static server from this folder:
+- `python -m http.server 5500`
+3. Open:
+- `http://localhost:5500/index.html`
+
+Note: Running `avatar.js` directly in Node.js will fail because it is browser code and needs `window` and `document`.
