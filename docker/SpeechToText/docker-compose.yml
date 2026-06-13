@@ -6,14 +6,12 @@ services:
     environment:
       STT_MODEL_PATH: /models/ggml-large-v3.bin
     volumes:
-      # Modell persistent -> kein Re-Download bei Restart
       - whisper-models:/models
-    # AMD-GPU Passthrough fuer Vulkan (RADV)
     devices:
       - /dev/dri:/dev/dri
     group_add:
       - video
-      - render
+    #  - render
 
 volumes:
   whisper-models:
