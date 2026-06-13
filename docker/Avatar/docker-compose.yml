@@ -1,0 +1,50 @@
+services:
+  frontend:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+      - frontend_node_modules:/app/node_modules
+    environment:
+      - VITE_API_BASE_URL=http://backend:8000
+    depends_on:
+      - backend
+
+  backend:
+    image: python:3.12-slim
+    working_dir: /app
+    command: sh -c "pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    environment:
+      - VOICE_GEN_BASE_URL=http://voice-gen:8011
+      - VOICE_GEN_MODEL=kokoro
+      - VOICE_GEN_VOICE=martin
+      - VOICE_GEN_LANG=de
+      - VOICE_GEN_SPEED=1.0
+    depends_on:
+      - voice-gen
+
+  voice-gen:
+    image: node:22-alpine
+    working_dir: /voice-gen
+    command: sh -c "node ./kokoro-proxy.mjs"
+    ports:
+      - "8011:8011"
+    volumes:
+      - ../../voice-gen:/voice-gen
+      - ../../output.json:/workspace/output.json:ro
+    environment:
+      - OUTPUT_JSON_PATH=/workspace/output.json
+      - VOICE_PROXY_HOST=0.0.0.0
+      - VOICE_PROXY_PORT=8011
+      - VOICE_PROXY_ALLOW_ORIGIN=*
+      - KOKORO_URL=http://host.docker.internal:8881/v1/audio/speech
+
+volumes:
+  frontend_node_modules:

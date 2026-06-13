@@ -1,0 +1,10 @@
+{
+  "name": "talktome-voice-gen",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local proxy for Kokoro TTS and output.json speech",
+  "scripts": {
+    "start": "node ./kokoro-proxy.mjs"
+  }
+}
