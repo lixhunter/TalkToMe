@@ -1,0 +1,212 @@
+{
+  "name": "Jena Digital Scraper → Record Manager",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "aa000001-0000-0000-0000-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://jena-digital.de/ueber-uns/aktuelles",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; RAGBot/1.0)"
+            }
+          ]
+        }
+      },
+      "id": "aa000001-0000-0000-0000-000000000002",
+      "name": "Fetch News Listing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [420, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Static navigation pages from jena-digital.de\nconst navUrls = [\n  'https://jena-digital.de/',\n  'https://jena-digital.de/ueber-uns',\n  'https://jena-digital.de/ueber-uns/unsere-mitglieder',\n  'https://jena-digital.de/ueber-uns/netzwerk-foerderung',\n  'https://jena-digital.de/unser-oekosystem-1',\n  'https://jena-digital.de/vernetzung',\n  'https://jena-digital.de/veranstaltungen',\n  'https://jena-digital.de/mitglied-werden',\n];\n\n// Discover article URLs from the news listing HTML\nconst html = $json.data || '';\nconst articlePattern = /href=\"(\\/ueber-uns\\/aktuelles\\/detail\\/[^\"?#]+)\"/g;\nconst discovered = new Set();\nlet m;\nwhile ((m = articlePattern.exec(html)) !== null) {\n  discovered.add('https://jena-digital.de' + m[1]);\n}\n\nconst allUrls = [...navUrls, ...discovered];\nconsole.log(`Total URLs to scrape: ${allUrls.length} (${navUrls.length} nav + ${discovered.size} articles)`);\n\nreturn allUrls.map(url => ({ json: { url } }));"
+      },
+      "id": "aa000001-0000-0000-0000-000000000003",
+      "name": "Build URL List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 400]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; RAGBot/1.0)"
+            }
+          ]
+        }
+      },
+      "id": "aa000001-0000-0000-0000-000000000004",
+      "name": "Fetch Each Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [860, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── HTML cleaning ────────────────────────────────────────────────\nfunction cleanHtml(html) {\n  return html\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<nav[\\s\\S]*?<\\/nav>/gi, '')\n    .replace(/<header[\\s\\S]*?<\\/header>/gi, '')\n    .replace(/<footer[\\s\\S]*?<\\/footer>/gi, '')\n    .replace(/<!--[\\s\\S]*?-->/g, '')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/\\s{2,}/g, ' ')\n    .trim();\n}\n\nfunction extractTitle(html) {\n  const m = html.match(/<title[^>]*>([^<]+)<\\/title>/i);\n  return m ? m[1].replace(/ [-|] Jena Digital.*$/i, '').trim() : '';\n}\n\nfunction extractDate(text) {\n  const m = text.match(/\\b(\\d{1,2}\\.\\d{1,2}\\.\\d{4})\\b/);\n  return m ? m[1] : null;\n}\n\n// ── Chunking ──────────────────────────────────────────────────────\nfunction chunkText(text, wordsPerChunk = 200, overlap = 30) {\n  const words = text.split(/\\s+/).filter(w => w.length > 0);\n  const chunks = [];\n  for (let i = 0; i < words.length; i += wordsPerChunk - overlap) {\n    const slice = words.slice(i, i + wordsPerChunk).join(' ');\n    if (slice.split(/\\s+/).length >= 20) {\n      chunks.push(slice);\n    }\n  }\n  return chunks;\n}\n\n// ── Process this page ────────────────────────────────────────────\nconst url = $json.url;\nconst html = $json.data || '';\nconst title = extractTitle(html);\nconst text = cleanHtml(html);\nconst date = extractDate(text);\n\n// Classify doc type (mirrors Python rag_processor logic)\nlet doc_type = 'org_page';\nif (url.includes('/aktuelles/detail/')) doc_type = 'news_article';\nelse if (url.includes('/veranstaltungen')) doc_type = 'event';\nelse if (url.includes('mitglied-werden') || url.includes('satzung')) doc_type = 'legal_doc';\n\nconst chunks = chunkText(text);\n\nreturn chunks.map((chunk, idx) => ({\n  json: {\n    text: chunk,\n    metadata: {\n      source: url,\n      site: 'jena-digital.de',\n      title,\n      date,\n      doc_type,\n      chunk_index: idx,\n      total_chunks: chunks.length\n    }\n  }\n}));"
+      },
+      "id": "aa000001-0000-0000-0000-000000000005",
+      "name": "Extract & Chunk",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 400]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "id": "aa000001-0000-0000-0000-000000000006",
+      "name": "Aggregate All Chunks",
+      "type": "n8n-nodes-base.itemLists",
+      "typeVersion": 3.1,
+      "position": [1300, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst { v4: uuidv4 } = require('uuid');\n\n// All chunks are in $json.data as an array of objects\nconst chunks = $json.data;\n\nconst filename = 'jena_digital_scraped.jsonl';\n\n// Build a deterministic hash from all chunk texts combined\nconst combined = chunks.map(c => c.text).join('\\n');\nconst file_hash = crypto.createHash('sha256').update(combined).digest('hex');\n\n// Format payload for the Record Manager webhook\nconst payload = {\n  filename,\n  file_hash,\n  chunks: chunks.map(c => ({\n    id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),\n    text: c.text,\n    metadata: c.metadata\n  }))\n};\n\nconsole.log(`Sending ${payload.chunks.length} chunks to Record Manager (hash: ${file_hash.slice(0,8)}...)`);\n\nreturn [{ json: payload }];"
+      },
+      "id": "aa000001-0000-0000-0000-000000000007",
+      "name": "Build Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://REPLACE_N8N_HOST:5678/webhook/rag-ingest",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ $json }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "aa000001-0000-0000-0000-000000000008",
+      "name": "Send to Record Manager",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1740, 400]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch News Listing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch News Listing": {
+      "main": [
+        [
+          {
+            "node": "Build URL List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build URL List": {
+      "main": [
+        [
+          {
+            "node": "Fetch Each Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Each Page": {
+      "main": [
+        [
+          {
+            "node": "Extract & Chunk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract & Chunk": {
+      "main": [
+        [
+          {
+            "node": "Aggregate All Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate All Chunks": {
+      "main": [
+        [
+          {
+            "node": "Build Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Payload": {
+      "main": [
+        [
+          {
+            "node": "Send to Record Manager",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "versionId": "1"
+}
