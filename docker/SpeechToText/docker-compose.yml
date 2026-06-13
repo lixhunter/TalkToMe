@@ -1,0 +1,19 @@
+services:
+  stt-service:
+    build: stt-service
+    ports:
+      - "8001:8001"
+    environment:
+      STT_MODEL_PATH: /models/ggml-large-v3.bin
+    volumes:
+      # Modell persistent -> kein Re-Download bei Restart
+      - whisper-models:/models
+    # AMD-GPU Passthrough fuer Vulkan (RADV)
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+
+volumes:
+  whisper-models:
