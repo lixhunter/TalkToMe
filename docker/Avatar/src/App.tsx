@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { playAudio } from './audio/playAudio'
 import { GuideAvatar } from './components/GuideAvatar'
 import { askAgent } from './services/agentService'
+import { startListening, stopListening } from './services/sttService'
 import { requestTtsAudio, speakWithBrowser } from './services/ttsService'
 import { fetchVoiceOutput, requestVoiceOutputAudio } from './services/voiceGenService'
 
@@ -44,6 +45,7 @@ const voicePollIntervalMs = 2500
 function App() {
   const [isTalking, setIsTalking] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [isListening, setIsListening] = useState(false)
   const [activeHint, setActiveHint] = useState(initialHint)
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null)
   const requestIdRef = useRef(0)
@@ -164,13 +166,29 @@ function App() {
   )
 
   const handleMicClick = () => {
+    if (isListening) {
+      stopListening()
+      setIsListening(false)
+      setActiveHint(initialHint)
+      return
+    }
+
     requestIdRef.current += 1
     window.speechSynthesis?.cancel()
     clearFallbackStopTimer()
     setIsTalking(false)
     setIsLoading(false)
     setActiveQuestionId(null)
-    setActiveHint('Sprachsteuerung kommt im naechsten Prototyp.')
+    setIsListening(true)
+
+    void startListening({
+      onStatus: (status) => setActiveHint(status),
+      onTranscript: (text) => setActiveHint('Du: ' + text),
+      onError: (message) => {
+        setActiveHint(message)
+        setIsListening(false)
+      },
+    })
   }
 
   useEffect(() => {
@@ -224,6 +242,7 @@ function App() {
       requestIdRef.current += 1
       clearFallbackStopTimer()
       window.speechSynthesis?.cancel()
+      stopListening()
     }
   }, [clearFallbackStopTimer])
 
@@ -250,9 +269,14 @@ function App() {
         </div>
 
         <aside className="question-panel" aria-label="Fragen">
-          <button className="mic-button" type="button" onClick={handleMicClick}>
+          <button
+            className="mic-button"
+            data-active={isListening}
+            type="button"
+            onClick={handleMicClick}
+          >
             <span className="button-icon" aria-hidden="true" />
-            Mikrofon
+            {isListening ? 'Zuhören stoppen' : 'Mikrofon'}
           </button>
 
           <div className="question-grid">

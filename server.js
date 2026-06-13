@@ -7,6 +7,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 5500);
 const VOICE_PROXY_URL = process.env.VOICE_PROXY_URL || "http://127.0.0.1:8011/api/speak-output";
 const AVATAR_UI_URL = process.env.AVATAR_UI_URL || "http://127.0.0.1:5173";
+const STT_PROXY_URL = process.env.STT_PROXY_URL || "http://127.0.0.1:8080/transcribe";
 
 const ROOT_DIR = __dirname;
 const OUTPUT_JSON_PATH = path.join(ROOT_DIR, "output.json");
@@ -310,6 +311,46 @@ async function proxySpeakOutput(request, response) {
   proxyRequest.end(body);
 }
 
+function proxyTranscribe(request, response) {
+  // Audio ist binaer (multipart/form-data) -> Request-Stream direkt pipen,
+  // nicht als utf8 buffern (wuerde Audio zerstoeren).
+  const upstream = new URL(STT_PROXY_URL);
+  const transport = upstream.protocol === "https:" ? https : http;
+  const headers = { ...request.headers, host: upstream.host };
+
+  const proxyRequest = transport.request(
+    {
+      protocol: upstream.protocol,
+      hostname: upstream.hostname,
+      port: upstream.port || (upstream.protocol === "https:" ? 443 : 80),
+      path: upstream.pathname + upstream.search,
+      method: "POST",
+      headers,
+    },
+    (proxyResponse) => {
+      response.writeHead(proxyResponse.statusCode || 502, {
+        "Content-Type": proxyResponse.headers["content-type"] || "application/json",
+        "Cache-Control": "no-store",
+      });
+      proxyResponse.pipe(response);
+    }
+  );
+
+  proxyRequest.on("error", (error) => {
+    console.error("STT proxy request failed:", error);
+    sendJson(response, 502, {
+      error: "STT proxy request failed",
+      details: error instanceof Error ? error.message : String(error),
+    });
+  });
+
+  request.on("close", () => {
+    proxyRequest.destroy();
+  });
+
+  request.pipe(proxyRequest);
+}
+
 const server = http.createServer(async (request, response) => {
   applyCorsHeaders(response, request);
   const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
@@ -342,6 +383,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     await handlePutOutputJson(request, response);
+    return;
+  }
+
+  if (method === "POST" && pathname === "/transcribe") {
+    proxyTranscribe(request, response);
     return;
   }
 
