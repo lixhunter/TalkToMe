@@ -3,8 +3,8 @@ async function buildAvatarPage() {
     throw new Error("This script must run in a browser.");
   }
 
-  const STATE_MACHINE_NAME = "State Machine 1";
-  const MOUTH_INPUT_HINTS = ["MouthOpen", "Talk", "JawOpen", "Viseme", "Mouth", "Open"];
+  const STATE_MACHINE_NAME = "Original State Machine";
+  const IS_TALKING_INPUT = "isTalking";
 
   const style = document.createElement("style");
   style.textContent = `
@@ -137,6 +137,62 @@ async function buildAvatarPage() {
       letter-spacing: 0.02em;
     }
 
+    .demo-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .switch-label {
+      font-size: 0.92rem;
+      color: var(--muted);
+      user-select: none;
+      cursor: pointer;
+    }
+
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 52px;
+      height: 28px;
+      flex-shrink: 0;
+    }
+
+    .switch input { opacity: 0; width: 0; height: 0; }
+
+    .slider {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(212, 248, 226, 0.25);
+      transition: background 0.25s;
+      cursor: pointer;
+    }
+
+    .slider::before {
+      content: "";
+      position: absolute;
+      left: 4px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: left 0.2s, background 0.25s;
+    }
+
+    .switch input:checked + .slider {
+      background: linear-gradient(135deg, #1da16c, #148fbd);
+      border-color: transparent;
+    }
+
+    .switch input:checked + .slider::before {
+      left: 28px;
+      background: #fff;
+    }
+
     @media (max-width: 700px) {
       .head { align-items: flex-start; flex-direction: column; }
       .controls { grid-template-columns: 1fr; }
@@ -154,6 +210,14 @@ async function buildAvatarPage() {
         <div class="avatar-wrap">
           <canvas id="riveCanvas" aria-label="Animated avatar"></canvas>
           <div class="avatar-glow"></div>
+        </div>
+
+        <div class="demo-row">
+          <label class="switch" title="Simulate talking animation">
+            <input type="checkbox" id="talkToggle" />
+            <span class="slider"></span>
+          </label>
+          <label class="switch-label" for="talkToggle">Talk-Demo</label>
         </div>
 
         <div class="controls">
@@ -240,102 +304,38 @@ async function buildAvatarPage() {
     }
   };
 
-  function createLipSyncDriver({ rive, stateMachineName }) {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    const audioCtx = new AudioCtx();
+  function getIsTalkingInput() {
+    let inputs = [];
+    try { inputs = riveInstance.stateMachineInputs(STATE_MACHINE_NAME) || []; } catch (_) {}
+    return inputs.find((i) => i.name === IS_TALKING_INPUT) || null;
+  }
 
-    const getMouthInput = () => {
-      let inputs = [];
-      try {
-        inputs = rive.stateMachineInputs(stateMachineName)  || [];
-      } catch (_) {}
-
-      const numbers = inputs.filter((i) => String(i.type).toLowerCase() === "number");
-      if (!numbers.length) return null;
-
-      for (const hint of MOUTH_INPUT_HINTS) {
-        const hit = numbers.find((i) => i.name.toLowerCase().includes(hint.toLowerCase()));
-        if (hit) return hit;
-      }
-      return numbers[0];
-    };
-
-    const mouthInput = getMouthInput();
-    if (!mouthInput) {
-      if (status) status.textContent = "No numeric mouth input found in " + stateMachineName + ".";
-      return { attachAudio: async () => () => {} };
-    }
-
-    // if (status) status.textContent = "Avatar loaded. Lip-sync input: " + mouthInput.name;
-
-    const sourceMap = new WeakMap();
-
-    const attachAudio = async (audioEl) => {
+  function createLipSyncDriver() {
+    const attachAudio = (audioEl) => {
       if (!audioEl) return () => {};
-      if (audioCtx.state !== "running") {
-        try { await audioCtx.resume(); } catch (_) {}
+
+      const input = getIsTalkingInput();
+      if (!input) {
+        if (status) status.textContent = "Input '" + IS_TALKING_INPUT + "' nicht gefunden in '" + STATE_MACHINE_NAME + "'.";
+        return () => {};
       }
 
-      let sourceNode = sourceMap.get(audioEl);
-      if (!sourceNode) {
-        try {
-          sourceNode = audioCtx.createMediaElementSource(audioEl);
-          sourceMap.set(audioEl, sourceNode);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          if (status) status.textContent = "Audio loaded, but lip-sync analyzer could not attach: " + msg;
-          return () => {};
-        }
-      }
-
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.75;
-
-      sourceNode.connect(analyser);
-      analyser.connect(audioCtx.destination);
-
-      const data = new Uint8Array(analyser.fftSize);
-      let rafId = 0;
-      let active = true;
-
-      const tick = () => {
-        if (!active) return;
-        analyser.getByteTimeDomainData(data);
-
-        let sumSq = 0;
-        for (let i = 0; i < data.length; i += 1) {
-          const centered = (data[i] - 128) / 128;
-          sumSq += centered * centered;
-        }
-
-        const rms = Math.sqrt(sumSq / data.length);
-        const gate = 0.014;
-        const gain = 18;
-        const value = Math.max(0, Math.min(1, (rms - gate) * gain));
-        mouthInput.value = value;
-
-        rafId = window.requestAnimationFrame(tick);
-      };
+      input.value = true;
 
       const stop = () => {
-        active = false;
-        if (rafId) window.cancelAnimationFrame(rafId);
-        mouthInput.value = 0;
-
-        try { sourceNode.disconnect(analyser); } catch (_) {}
-        try { analyser.disconnect(); } catch (_) {}
-
+        input.value = false;
         audioEl.removeEventListener("ended", stop);
         audioEl.removeEventListener("pause", onPause);
+        audioEl.removeEventListener("play", onPlay);
       };
 
-      const onPause = () => { mouthInput.value = 0; };
+      const onPause = () => { input.value = false; };
+      const onPlay  = () => { input.value = true; };
 
       audioEl.addEventListener("ended", stop);
       audioEl.addEventListener("pause", onPause);
+      audioEl.addEventListener("play", onPlay);
 
-      tick();
       return stop;
     };
 
@@ -358,7 +358,9 @@ async function buildAvatarPage() {
         alignment: Alignment.Center,
       }),
       onLoad: () => {
-        if (status) status.textContent = "Avatar loaded: " + src;
+        const input = getIsTalkingInput();
+        if (input) input.value = false;
+        if (status) status.textContent = "Avatar bereit.";
       },
     };
 
@@ -376,21 +378,17 @@ async function buildAvatarPage() {
     resizeRiveCanvas();
     window.addEventListener("resize", resizeRiveCanvas);
 
-    const lipSync = createLipSyncDriver({
-      rive: riveInstance,
-      stateMachineName: STATE_MACHINE_NAME,
-    });
+    const lipSync = createLipSyncDriver();
 
     const playAudioAndSync = async (audioEl) => {
       stopLipSync();
-
+      cleanupLipSync = lipSync.attachAudio(audioEl);
       try {
-        cleanupLipSync = await lipSync.attachAudio(audioEl);
         await audioEl.play();
-        if (status) status.textContent = "Playing audio with lip-sync.";
+        if (status) status.textContent = "Audio wird abgespielt.";
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (status) status.textContent = "Audio play failed: " + msg;
+        if (status) status.textContent = "Audio play fehlgeschlagen: " + msg;
       }
     };
 
@@ -445,6 +443,28 @@ async function buildAvatarPage() {
         const file = input && input.files && input.files[0] ? input.files[0] : null;
         if (!file) return;
         await window.playAvatarTTS(file);
+      });
+    }
+
+    const talkToggle = document.getElementById("talkToggle");
+
+    const startDemoTalk = () => {
+      const input = getIsTalkingInput();
+      if (!input) { if (status) status.textContent = "Input '" + IS_TALKING_INPUT + "' nicht gefunden."; return; }
+      input.value = true;
+      if (status) status.textContent = "Talk-Demo aktiv.";
+    };
+
+    const stopDemoTalk = () => {
+      const input = getIsTalkingInput();
+      if (input) input.value = false;
+      if (status) status.textContent = "Talk-Demo gestoppt.";
+    };
+
+    if (talkToggle) {
+      talkToggle.addEventListener("change", () => {
+        if (talkToggle.checked) { stopLipSync(); startDemoTalk(); }
+        else { stopDemoTalk(); }
       });
     }
 
