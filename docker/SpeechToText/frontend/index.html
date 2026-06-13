@@ -25,6 +25,7 @@
 
   <script>
     const STT_URL    = '/transcribe';
+    const N8N_URL    = 'http://192.168.2.185:5678/webhook-test/stt';  // n8n LLM-Pipeline
     const THRESHOLD  = 0.015;  // RMS Lautstärke-Schwelle
     const SILENCE_MS = 1200;   // Stille -> Aufnahme stoppen
 
@@ -120,12 +121,29 @@
         const data = await res.json();
         pending.className = '';
         pending.textContent = data.text || '(leer)';
+
+        // Text an n8n-Pipeline weiterreichen (nur wenn nicht leer)
+        if (data.text) sendToN8n(data.text);
       } catch (e) {
         pending.textContent = 'Fehler: ' + e.message;
         pending.className = 'pending';
       }
 
       if (active) status.textContent = 'Hört zu...';
+    }
+
+    async function sendToN8n(text) {
+      // STT-Ergebnis steht schon im UI; n8n-Call ist eigener try damit
+      // ein Webhook-Fehler die Transkription nicht überschreibt.
+      try {
+        await fetch(N8N_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text })
+        });
+      } catch (e) {
+        console.error('n8n-Webhook fehlgeschlagen:', e);
+      }
     }
   </script>
 </body>
