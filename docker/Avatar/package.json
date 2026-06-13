@@ -1,0 +1,84 @@
+{
+  "name": "pixel-avatar-lib",
+  "version": "1.0.0",
+  "description": "A React component library for generating customizable pixel avatars with DNA encoding system",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README_ZH.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "vite",
+    "dev:lib": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "web": "vite",
+    "prepublishOnly": "npm run build",
+    "lint": "eslint src --ext .ts,.tsx",
+    "lint:fix": "eslint src --ext .ts,.tsx --fix",
+    "type-check": "tsc --noEmit"
+  },
+  "keywords": [
+    "react",
+    "avatar",
+    "pixel",
+    "component",
+    "library",
+    "pixel-art",
+    "profile",
+    "nft",
+    "generator",
+    "customizable",
+    "canvas",
+    "typescript",
+    "dna-encoding",
+    "8bit",
+    "retro"
+  ],
+  "author": {
+    "name": "snjyor",
+    "url": "https://github.com/snjyor"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/snjyor/pixel_avator.git"
+  },
+  "homepage": "https://github.com/snjyor/pixel_avator#readme",
+  "bugs": {
+    "url": "https://github.com/snjyor/pixel_avator/issues"
+  },
+  "peerDependencies": {
+    "react": ">=16.8.0",
+    "react-dom": ">=16.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "tsup": "^8.5.0",
+    "typescript": "^5",
+    "vite": "^8.0.16"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "dependencies": {
+    "pixel-avatar-lib": "^1.0.0"
+  }
+}
