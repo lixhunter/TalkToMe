@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 
 from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 
 # --- Config (hardcoded, Hackathon-Modus) ---
 MODEL_PATH = os.getenv("STT_MODEL_PATH", "/models/ggml-large-v3.bin")
@@ -11,6 +12,7 @@ WHISPER_BIN = os.getenv("WHISPER_BIN", "/opt/whisper.cpp/build/bin/whisper-cli")
 LANGUAGE = "de"
 
 app = FastAPI(title="STT-Service (whisper.cpp/Vulkan)")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 def to_wav(src_path: str) -> str:
