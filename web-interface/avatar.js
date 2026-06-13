@@ -5,6 +5,7 @@ async function buildAvatarPage() {
 
   const STATE_MACHINE_NAME = "Original State Machine";
   const IS_TALKING_INPUT = "isTalking";
+  const DEFAULT_PROXY_BASE = "http://localhost:8011";
 
   const style = document.createElement("style");
   style.textContent = `
@@ -109,6 +110,10 @@ async function buildAvatarPage() {
       gap: 10px;
     }
 
+    .controls-secondary {
+      grid-template-columns: 1fr auto;
+    }
+
     .controls input, .controls button {
       border-radius: 12px;
       border: 1px solid rgba(212, 248, 226, 0.25);
@@ -135,6 +140,16 @@ async function buildAvatarPage() {
       color: var(--muted);
       font-size: 0.96rem;
       letter-spacing: 0.02em;
+    }
+
+    .player-wrap {
+      display: grid;
+      gap: 8px;
+    }
+
+    #ttsPlayer {
+      width: 100%;
+      accent-color: #19c37d;
     }
 
     .demo-row {
@@ -195,7 +210,7 @@ async function buildAvatarPage() {
 
     @media (max-width: 700px) {
       .head { align-items: flex-start; flex-direction: column; }
-      .controls { grid-template-columns: 1fr; }
+      .controls, .controls-secondary { grid-template-columns: 1fr; }
     }
   `;
   document.head.appendChild(style);
@@ -226,6 +241,15 @@ async function buildAvatarPage() {
           <input id="ttsFile" type="file" accept="audio/*,.m4a,audio/mp4" />
         </div>
 
+        <div class="controls controls-secondary">
+          <input id="proxyBaseUrl" value="http://localhost:8011" placeholder="Voice proxy URL" />
+          <button id="speakOutputBtn" type="button">Speak output.json</button>
+        </div>
+
+        <div class="player-wrap">
+          <audio id="ttsPlayer" controls preload="metadata"></audio>
+        </div>
+
         <p class="status" id="avatarStatus">Loading avatar...</p>
       </section>
     </main>
@@ -236,6 +260,9 @@ async function buildAvatarPage() {
   const ttsUrlInput = document.getElementById("ttsUrl");
   const playUrlBtn = document.getElementById("playUrlBtn");
   const ttsFileInput = document.getElementById("ttsFile");
+  const proxyBaseUrlInput = document.getElementById("proxyBaseUrl");
+  const speakOutputBtn = document.getElementById("speakOutputBtn");
+  const ttsPlayer = document.getElementById("ttsPlayer");
 
   const pageBase = new URL("./", window.location.href);
   const scriptNode = document.currentScript;
@@ -296,6 +323,15 @@ async function buildAvatarPage() {
 
   let riveInstance = null;
   let cleanupLipSync = null;
+  let currentObjectUrl = null;
+
+  const buildProxyUrl = (route) => {
+    const raw = proxyBaseUrlInput && proxyBaseUrlInput.value
+      ? proxyBaseUrlInput.value.trim()
+      : DEFAULT_PROXY_BASE;
+    const normalized = raw.endsWith("/") ? raw : raw + "/";
+    return new URL(route, normalized).href;
+  };
 
   const stopLipSync = () => {
     if (typeof cleanupLipSync === "function") {
@@ -320,21 +356,40 @@ async function buildAvatarPage() {
         return () => {};
       }
 
-      input.value = true;
+      const setTalkingFromPlayback = () => {
+        input.value = !audioEl.paused && !audioEl.ended && audioEl.currentTime > 0;
+      };
 
       const stop = () => {
         input.value = false;
         audioEl.removeEventListener("ended", stop);
         audioEl.removeEventListener("pause", onPause);
         audioEl.removeEventListener("play", onPlay);
+        audioEl.removeEventListener("playing", onPlay);
+        audioEl.removeEventListener("stalled", onStopLikeEvent);
+        audioEl.removeEventListener("waiting", onStopLikeEvent);
+        audioEl.removeEventListener("suspend", onStopLikeEvent);
+        audioEl.removeEventListener("emptied", onStopLikeEvent);
+        audioEl.removeEventListener("abort", onStopLikeEvent);
+        audioEl.removeEventListener("error", onStopLikeEvent);
       };
 
       const onPause = () => { input.value = false; };
-      const onPlay  = () => { input.value = true; };
+      const onPlay = () => { setTalkingFromPlayback(); };
+      const onStopLikeEvent = () => { input.value = false; };
 
       audioEl.addEventListener("ended", stop);
       audioEl.addEventListener("pause", onPause);
       audioEl.addEventListener("play", onPlay);
+      audioEl.addEventListener("playing", onPlay);
+      audioEl.addEventListener("stalled", onStopLikeEvent);
+      audioEl.addEventListener("waiting", onStopLikeEvent);
+      audioEl.addEventListener("suspend", onStopLikeEvent);
+      audioEl.addEventListener("emptied", onStopLikeEvent);
+      audioEl.addEventListener("abort", onStopLikeEvent);
+      audioEl.addEventListener("error", onStopLikeEvent);
+
+      input.value = false;
 
       return stop;
     };
@@ -387,17 +442,30 @@ async function buildAvatarPage() {
         await audioEl.play();
         if (status) status.textContent = "Audio wird abgespielt.";
       } catch (err) {
+        stopLipSync();
         const msg = err instanceof Error ? err.message : String(err);
         if (status) status.textContent = "Audio play fehlgeschlagen: " + msg;
       }
     };
 
     window.playAvatarTTS = async (source) => {
-      let audioEl = null;
+      let audioEl = ttsPlayer instanceof HTMLAudioElement ? ttsPlayer : null;
       let objectUrl = null;
 
+      if (!audioEl) {
+        audioEl = new Audio();
+      }
+
+      audioEl.pause();
+      audioEl.currentTime = 0;
+
+      if (currentObjectUrl) {
+        try { URL.revokeObjectURL(currentObjectUrl); } catch (_) {}
+        currentObjectUrl = null;
+      }
+
       if (typeof source === "string") {
-        audioEl = new Audio(source);
+        audioEl.src = source;
         audioEl.crossOrigin = "anonymous";
       } else if (source instanceof Blob) {
         const isM4AFile = typeof File !== "undefined" && source instanceof File && /\.m4a$/i.test(source.name || "");
@@ -406,7 +474,8 @@ async function buildAvatarPage() {
           : source;
 
         objectUrl = URL.createObjectURL(normalizedBlob);
-        audioEl = new Audio(objectUrl);
+        currentObjectUrl = objectUrl;
+        audioEl.src = objectUrl;
       } else if (source instanceof HTMLAudioElement) {
         audioEl = source;
       } else {
@@ -415,15 +484,39 @@ async function buildAvatarPage() {
 
       audioEl.preload = "auto";
       audioEl.playsInline = true;
+      audioEl.volume = 1;
+      audioEl.muted = false;
+      audioEl.loop = false;
 
-      if (objectUrl) {
-        audioEl.addEventListener("ended", () => {
-          try { URL.revokeObjectURL(objectUrl); } catch (_) {}
-        }, { once: true });
-      }
+      audioEl.addEventListener("loadedmetadata", () => {
+        if (status) status.textContent = "Audio loaded: " + Math.round(audioEl.duration * 10) / 10 + "s";
+      }, { once: true });
+
+      audioEl.addEventListener("error", () => {
+        if (status) status.textContent = "Audio error while loading/playing.";
+      }, { once: true });
 
       await playAudioAndSync(audioEl);
       return audioEl;
+    };
+
+    const speakOutputFromProxy = async () => {
+      const proxyUrl = buildProxyUrl("api/speak-output");
+      if (status) status.textContent = "Generating speech from output.json...";
+
+      const response = await fetch(proxyUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "kokoro", voice: "martin", lang: "de", speed: 1.0 }),
+      });
+
+      if (!response.ok) {
+        const details = await response.text();
+        throw new Error("Proxy request failed (" + response.status + "): " + details);
+      }
+
+      const audioBlob = await response.blob();
+      await window.playAvatarTTS(audioBlob);
     };
 
     if (playUrlBtn) {
@@ -443,6 +536,20 @@ async function buildAvatarPage() {
         const file = input && input.files && input.files[0] ? input.files[0] : null;
         if (!file) return;
         await window.playAvatarTTS(file);
+      });
+    }
+
+    if (speakOutputBtn) {
+      speakOutputBtn.addEventListener("click", async () => {
+        speakOutputBtn.disabled = true;
+        try {
+          await speakOutputFromProxy();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (status) status.textContent = "output.json speech failed: " + message;
+        } finally {
+          speakOutputBtn.disabled = false;
+        }
       });
     }
 
@@ -469,7 +576,7 @@ async function buildAvatarPage() {
     }
 
     if (status) {
-      status.textContent = "Avatar ready. Use Play URL, choose an audio file, or call window.playAvatarTTS(source).";
+      status.textContent = "Avatar ready. Click Speak output.json for model TTS with lip-sync.";
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
