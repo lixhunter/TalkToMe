@@ -1,0 +1,243 @@
+{
+  "name": "Jena Digital – Scrape, Check, Chunk & Upsert",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "bb000001-0000-0000-0000-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://jena-digital.de/ueber-uns/aktuelles",
+        "options": { "response": { "response": { "responseFormat": "text" } }, "timeout": 30000 },
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "User-Agent", "value": "Mozilla/5.0 (compatible; RAGBot/1.0)" }] }
+      },
+      "id": "bb000001-0000-0000-0000-000000000002",
+      "name": "Fetch News Listing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [420, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const NAV_URLS = [\n  'https://jena-digital.de/',\n  'https://jena-digital.de/ueber-uns',\n  'https://jena-digital.de/ueber-uns/unsere-mitglieder',\n  'https://jena-digital.de/ueber-uns/mitglied-werden',\n  'https://jena-digital.de/ueber-uns/aktuelles',\n  'https://jena-digital.de/ueber-uns/jobs-bei-uns',\n  'https://jena-digital.de/unser-oekosystem/fachgruppen-arbeitskreise',\n  'https://jena-digital.de/unser-team',\n  'https://jena-digital.de/veranstaltungen',\n  'https://jena-digital.de/veranstaltungen/archiv',\n  'https://jena-digital.de/jedi',\n  'https://jena-digital.de/dehub',\n  'https://jena-digital.de/jobs',\n  'https://jena-digital.de/impressum',\n];\n\nconst html = $json.data || '';\nconst articlePattern = /href=\"(\\/ueber-uns\\/aktuelles\\/detail\\/[^\"?#]+)\"/g;\nconst discovered = new Set();\nlet m;\nwhile ((m = articlePattern.exec(html)) !== null) {\n  discovered.add('https://jena-digital.de' + m[1]);\n}\n\nconst allUrls = [...NAV_URLS, ...discovered];\nreturn allUrls.map(url => ({ json: { url } }));"
+      },
+      "id": "bb000001-0000-0000-0000-000000000003",
+      "name": "Build URL List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 400]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": { "response": { "response": { "responseFormat": "text" } }, "timeout": 30000 },
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "User-Agent", "value": "Mozilla/5.0 (compatible; RAGBot/1.0)" }] }
+      },
+      "id": "bb000001-0000-0000-0000-000000000004",
+      "name": "Fetch Each Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [860, 400],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const url = $('Build URL List').item.json.url;\nconst html = $json.data || '';\n\nfunction stripHtml(h) {\n  return h\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<nav[\\s\\S]*?<\\/nav>/gi, '')\n    .replace(/<header[\\s\\S]*?<\\/header>/gi, '')\n    .replace(/<footer[\\s\\S]*?<\\/footer>/gi, '')\n    .replace(/<!--[\\s\\S]*?-->/g, '')\n    .replace(/<[^>]+>/g, '\\n')\n    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"').replace(/&#\\d+;/g, '')\n    .replace(/\\n{3,}/g, '\\n\\n').trim();\n}\n\nfunction extractTitle(h) {\n  const m = h.match(/<h1[^>]*>([^<]+)<\\/h1>/i) || h.match(/<title[^>]*>([^<]+)<\\/title>/i);\n  return m ? m[1].replace(/ [-|] Jena Digital.*$/i, '').trim() : '';\n}\n\nfunction classifyDocType(u) {\n  if (u.includes('/aktuelles/detail/')) return 'news_article';\n  if (u.includes('/veranstaltungen')) return 'event';\n  if (u.includes('mitglied-werden') || u.includes('satzung')) return 'legal_doc';\n  return 'org_page';\n}\n\nif (!html || $json.error || html.includes('Seite nicht gefunden')) return [];\n\nconst content = stripHtml(html);\nconst title = extractTitle(html);\nconst dateMatch = content.match(/\\b(\\d{1,2}\\.\\d{1,2}\\.\\d{4})\\b/);\nconst date = dateMatch ? dateMatch[1] : null;\nconst doc_type = classifyDocType(url);\n\n// Pure JS hash (kein require, kein crypto global nötig)\nfunction hashStr(str) {\n  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;\n  for (let i = 0; i < str.length; i++) {\n    const ch = str.charCodeAt(i);\n    h1 = Math.imul(h1 ^ ch, 2654435761);\n    h2 = Math.imul(h2 ^ ch, 1597334677);\n  }\n  h1 = Math.imul(h1 ^ (h1>>>16), 2246822507) ^ Math.imul(h2 ^ (h2>>>13), 3266489909);\n  h2 = Math.imul(h2 ^ (h2>>>16), 2246822507) ^ Math.imul(h1 ^ (h1>>>13), 3266489909);\n  return (4294967296 * (2097151 & h2) + (h1>>>0)).toString(16).padStart(16,'0');\n}\nconst content_hash = hashStr(content);\n\nreturn [{ json: { url, title, content, content_hash, date, doc_type } }];"
+      },
+      "id": "bb000001-0000-0000-0000-000000000005",
+      "name": "Extract & Hash",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ \"SELECT (SELECT file_hash FROM document_records WHERE filename = '\" + $json.url.replace(/'/g, \"''\") + \"') AS db_hash\" }}",
+        "additionalFields": {}
+      },
+      "id": "bb000001-0000-0000-0000-000000000006",
+      "name": "Check Page Hash",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1300, 400],
+      "credentials": { "postgres": { "id": "REPLACE_POSTGRES_CRED_ID", "name": "PostgreSQL" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{
+            "id": "hash-check",
+            "leftValue": "={{ $json.db_hash }}",
+            "rightValue": "={{ $('Extract & Hash').item.json.content_hash }}",
+            "operator": { "type": "string", "operation": "equals" }
+          }],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "bb000001-0000-0000-0000-000000000007",
+      "name": "Hash Unchanged?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1520, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ \"DELETE FROM document_embeddings WHERE metadata->>'source' = '\" + $('Extract & Hash').item.json.url.replace(/'/g, \"''\") + \"'\" }}",
+        "additionalFields": {}
+      },
+      "id": "bb000001-0000-0000-0000-000000000008",
+      "name": "Delete Old Vectors",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1740, 500],
+      "credentials": { "postgres": { "id": "REPLACE_POSTGRES_CRED_ID", "name": "PostgreSQL" } }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ \"INSERT INTO document_records (filename, file_hash) VALUES ('\" + $('Extract & Hash').item.json.url.replace(/'/g, \"''\") + \"', '\" + $('Extract & Hash').item.json.content_hash + \"') ON CONFLICT (filename) DO UPDATE SET file_hash = EXCLUDED.file_hash, updated_at = NOW()\" }}",
+        "additionalFields": {}
+      },
+      "id": "bb000001-0000-0000-0000-000000000009",
+      "name": "Upsert Record",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1960, 500],
+      "credentials": { "postgres": { "id": "REPLACE_POSTGRES_CRED_ID", "name": "PostgreSQL" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Alle Parameter aus der gepaarten Seite ───────────────────────\nconst page = $('Extract & Hash').item.json;\nconst TARGET_LEAF = 96, MAX_LEAF = 220, MAX_W = 384, OVERLAP = 38;\n\n// ── Text-Cleaning (ports aus rag_processor.py) ────────────────────\nfunction cleanText(text) {\n  const NOISE = [/mehr erfahren/gi,/Jetzt anmelden/gi,/zur Anmeldung/gi,/hier klicken/gi,/Cookie.*?akzeptieren/gi];\n  for (const p of NOISE) text = text.replace(p, '');\n  const lines = text.split('\\n');\n  const res = [];\n  for (const line of lines) {\n    const s = line.trim();\n    if (!s) { res.push(''); continue; }\n    if (res.length && res[res.length-1] &&\n        res[res.length-1].split(/\\s+/).length < 6 &&\n        !res[res.length-1].trimEnd().match(/[.!?:;]$/)) {\n      res[res.length-1] = res[res.length-1].trimEnd() + ' ' + s;\n    } else { res.push(s); }\n  }\n  return res.join('\\n').replace(/\\n{3,}/g,'\\n\\n').replace(/ {2,}/g,' ').trim();\n}\n\n// ── Satz-Splitter (Deutsch) ───────────────────────────────────────\nfunction splitSentences(text) {\n  return text.split(/(?<=[.!?])\\s+(?=[A-ZÜÄÖA-Z])/).map(s=>s.trim()).filter(s=>s.length>20);\n}\n\n// ── Sentence Window (für news_article) ───────────────────────────\nfunction sentenceWindowChunks(text) {\n  const raw = splitSentences(text);\n  const sents = [];\n  for (const s of raw) {\n    if (sents.length && s.split(/\\s+/).length < 8) {\n      sents[sents.length-1] = sents[sents.length-1].replace(/\\.\\s*$/,'') + ' ' + s;\n    } else sents.push(s);\n  }\n  return sents.map((s,i) => ({\n    text: s,\n    context_window: sents.slice(Math.max(0,i-2), Math.min(sents.length,i+3)).join(' '),\n    chunk_strategy: 'sentence_window'\n  }));\n}\n\n// ── Fixed-Size (für event) ────────────────────────────────────────\nfunction fixedSizeChunks(text) {\n  const words = text.split(/\\s+/);\n  const chunks = [];\n  let start=0, idx=0;\n  while (start < words.length) {\n    const end = Math.min(start+MAX_W, words.length);\n    const t = words.slice(start,end).join(' ');\n    chunks.push({ text:t, context_window:t, chunk_strategy:'fixed_size', chunk_index:idx });\n    if (end===words.length) break;\n    start += MAX_W - OVERLAP; idx++;\n  }\n  chunks.forEach(c => c.total_chunks=chunks.length);\n  return chunks;\n}\n\n// ── Hierarchical (für org_page + legal_doc) ───────────────────────\nfunction splitSections(text) {\n  const lines = text.split('\\n');\n  const secs = [];\n  let heading='Einleitung', body=[];\n  for (const line of lines) {\n    const s=line.trim(); if(!s) continue;\n    const isH = s.length<=80 && !s.match(/[.,;:]$/) && s[0]===s[0].toUpperCase() && s.split(/\\s+/).length<=10;\n    if (isH && body.length) { secs.push({heading,body:body.join('\\n')}); heading=s; body=[]; }\n    else body.push(s);\n  }\n  if (body.length) secs.push({heading,body:body.join('\\n')});\n  return secs;\n}\n\nfunction splitOversized(text) {\n  const words=text.split(/\\s+/); const parts=[]; let start=0;\n  while(start<words.length) {\n    const end=Math.min(start+MAX_LEAF,words.length);\n    parts.push(words.slice(start,end).join(' '));\n    if(end===words.length) break;\n    start+=MAX_LEAF-OVERLAP;\n  }\n  return parts;\n}\n\nfunction mergeToLeafNodes(paragraphs) {\n  const expanded=[];\n  for (const p of paragraphs) {\n    if(p.split(/\\s+/).length>MAX_LEAF) expanded.push(...splitOversized(p));\n    else expanded.push(p);\n  }\n  const nodes=[]; let parts=[], words=0;\n  for (const p of expanded) {\n    const pw=p.split(/\\s+/).length;\n    if(!words) { parts.push(p); words=pw; }\n    else if(words+pw<=MAX_LEAF) {\n      parts.push(p); words+=pw;\n      if(words>=TARGET_LEAF) { nodes.push(parts.join('\\n\\n')); parts=[]; words=0; }\n    } else { nodes.push(parts.join('\\n\\n')); parts=[p]; words=pw; }\n  }\n  if(parts.length) nodes.push(parts.join('\\n\\n'));\n  return nodes;\n}\n\nfunction hierarchicalChunks(text, pageTitle) {\n  const chunks=[];\n  const sections=splitSections(text);\n  for(let si=0;si<sections.length;si++) {\n    const sec=sections[si];\n    let paras=sec.body.split(/\\n{2,}/).map(p=>p.trim()).filter(p=>p.length>40);\n    if(!paras.length) paras=[sec.body];\n    const leaves=mergeToLeafNodes(paras);\n    for(let ni=0;ni<leaves.length;ni++) {\n      chunks.push({\n        text:leaves[ni], context_window:sec.body, chunk_strategy:'hierarchical',\n        parent_section:sec.heading, parent_page:pageTitle,\n        section_index:si, node_index:ni, total_nodes:leaves.length, total_sections:sections.length\n      });\n    }\n  }\n  return chunks;\n}\n\n// ── Routing ───────────────────────────────────────────────────────\nconst cleaned = cleanText(page.content);\nif (!cleaned || cleaned.split(/\\s+/).length < 20) return [];\n\nlet raw;\nif (page.doc_type === 'news_article') raw = sentenceWindowChunks(cleaned);\nelse if (page.doc_type === 'event') raw = fixedSizeChunks(cleaned);\nelse raw = hierarchicalChunks(cleaned, page.title);\n\nreturn raw.map((rc, idx) => ({\n  json: {\n    text: rc.text,\n    filename: page.url,\n    file_hash: page.content_hash,\n    source: page.url,\n    title: page.title,\n    doc_type: page.doc_type,\n    date: page.date,\n    site: 'jena-digital.de',\n    context_window: rc.context_window || rc.text,\n    chunk_strategy: rc.chunk_strategy,\n    chunk_index: idx,\n    total_chunks: raw.length,\n    ...(rc.parent_section ? { parent_section: rc.parent_section } : {}),\n    ...(rc.section_index !== undefined ? { section_index: rc.section_index } : {})\n  }\n}));"
+      },
+      "id": "bb000001-0000-0000-0000-000000000010",
+      "name": "Chunk Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2180, 500]
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "tableName": { "__rl": true, "value": "document_embeddings", "mode": "list", "cachedResultName": "document_embeddings" },
+        "options": {}
+      },
+      "id": "bb000001-0000-0000-0000-000000000011",
+      "name": "Insert into Vector Store",
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePGVector",
+      "typeVersion": 1,
+      "position": [2400, 500],
+      "continueOnFail": true,
+      "credentials": { "postgres": { "id": "REPLACE_POSTGRES_CRED_ID", "name": "PostgreSQL" } }
+    },
+    {
+      "parameters": {
+        "dataType": "json",
+        "jsonMode": "expressionData",
+        "jsonData": "={{ $json.text }}",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              { "name": "source",         "value": "={{ $json.source }}" },
+              { "name": "filename",       "value": "={{ $json.filename }}" },
+              { "name": "file_hash",      "value": "={{ $json.file_hash }}" },
+              { "name": "title",          "value": "={{ $json.title }}" },
+              { "name": "doc_type",       "value": "={{ $json.doc_type }}" },
+              { "name": "date",           "value": "={{ $json.date }}" },
+              { "name": "context_window", "value": "={{ $json.context_window }}" },
+              { "name": "chunk_strategy", "value": "={{ $json.chunk_strategy }}" }
+            ]
+          }
+        }
+      },
+      "id": "bb000001-0000-0000-0000-000000000013",
+      "name": "Default Data Loader",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1,
+      "position": [2400, 600]
+    },
+    {
+      "parameters": {
+        "chunkSize": 100000,
+        "chunkOverlap": 0,
+        "options": {}
+      },
+      "id": "bb000001-0000-0000-0000-000000000014",
+      "name": "No-Op Splitter",
+      "type": "@n8n/n8n-nodes-langchain.textSplitterCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [2400, 860]
+    },
+    {
+      "parameters": {
+        "model": "bge-m3",
+        "options": {}
+      },
+      "id": "bb000001-0000-0000-0000-000000000012",
+      "name": "Embeddings",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1,
+      "position": [2400, 760],
+      "credentials": { "openAiApi": { "id": "REPLACE_OPENAI_CRED_ID", "name": "OpenAI account" } }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{ "node": "Fetch News Listing", "type": "main", "index": 0 }]]
+    },
+    "Fetch News Listing": {
+      "main": [[{ "node": "Build URL List", "type": "main", "index": 0 }]]
+    },
+    "Build URL List": {
+      "main": [[{ "node": "Fetch Each Page", "type": "main", "index": 0 }]]
+    },
+    "Fetch Each Page": {
+      "main": [[{ "node": "Extract & Hash", "type": "main", "index": 0 }]]
+    },
+    "Extract & Hash": {
+      "main": [[{ "node": "Check Page Hash", "type": "main", "index": 0 }]]
+    },
+    "Check Page Hash": {
+      "main": [[{ "node": "Hash Unchanged?", "type": "main", "index": 0 }]]
+    },
+    "Hash Unchanged?": {
+      "main": [
+        [],
+        [{ "node": "Delete Old Vectors", "type": "main", "index": 0 }]
+      ]
+    },
+    "Delete Old Vectors": {
+      "main": [[{ "node": "Upsert Record", "type": "main", "index": 0 }]]
+    },
+    "Upsert Record": {
+      "main": [[{ "node": "Chunk Page", "type": "main", "index": 0 }]]
+    },
+    "Chunk Page": {
+      "main": [[{ "node": "Insert into Vector Store", "type": "main", "index": 0 }]]
+    },
+    "No-Op Splitter": {
+      "ai_text_splitter": [[{ "node": "Default Data Loader", "type": "ai_text_splitter", "index": 0 }]]
+    },
+    "Default Data Loader": {
+      "ai_document": [[{ "node": "Insert into Vector Store", "type": "ai_document", "index": 0 }]]
+    },
+    "Embeddings": {
+      "ai_embedding": [[{ "node": "Insert into Vector Store", "type": "ai_embedding", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "versionId": "1"
+}
