@@ -1,4 +1,14 @@
 services:
+  web:
+    image: nginx:alpine
+    depends_on:
+      - stt-service
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
   stt-service:
     build: stt-service
     ports:
