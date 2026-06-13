@@ -2,72 +2,41 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>JEDI — Avatar Live</title>
+  <title>STT Live</title>
   <style>
-    :root { --accent: #4a4; --accent-warn: #aa4; --accent-rec: #a44; }
-    * { box-sizing: border-box; }
-    body { font-family: monospace; max-width: 700px; margin: 24px auto; padding: 0 20px; background: #111; color: #eee; }
-    h1 { font-size: 1.2rem; color: #aaa; text-align: center; }
-
-    /* Avatar */
-    #avatar-stage { display: flex; flex-direction: column; align-items: center; gap: 12px; margin: 8px 0 20px; }
-    #avatar { width: 240px; height: 240px; border-radius: 16px; object-fit: cover; background: #1a1a1a;
-              border: 2px solid #333; transition: border-color 0.2s, box-shadow 0.2s; }
-    #avatar.speaking { border-color: var(--accent); box-shadow: 0 0 24px rgba(68,170,68,0.35); }
-    #avatar.listening { border-color: var(--accent-rec); box-shadow: 0 0 24px rgba(170,68,68,0.30); }
-
-    /* Controls */
-    #controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    body { font-family: monospace; max-width: 700px; margin: 40px auto; padding: 0 20px; background: #111; color: #eee; }
+    h1 { font-size: 1.2rem; color: #aaa; }
     #btn { padding: 12px 28px; font-size: 1rem; cursor: pointer; border: 1px solid #555; background: #222; color: #eee; border-radius: 4px; }
-    #btn.active { border-color: var(--accent-rec); color: var(--accent-rec); }
-    label.toggle { font-size: 0.85rem; color: #aaa; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-
+    #btn.active { border-color: #e44; color: #e44; }
     #status { margin: 16px 0 8px; color: #888; font-size: 0.85rem; }
     #meter { width: 100%; height: 6px; background: #333; border-radius: 3px; margin-bottom: 20px; }
-    #meter-bar { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width 0.05s; }
-
+    #meter-bar { height: 100%; width: 0; background: #4a4; border-radius: 3px; transition: width 0.05s; }
     #transcript { border-top: 1px solid #333; padding-top: 16px; }
-    #transcript p { margin: 8px 0; padding: 8px 12px; background: #1a1a1a; border-left: 3px solid var(--accent); border-radius: 2px; }
-    #transcript p.pending { border-left-color: var(--accent-warn); color: #aaa; font-style: italic; }
-    #transcript p.bot { border-left-color: #46a; color: #cde; }
-    #transcript p.bot::before { content: 'JEDI: '; color: #69c; font-weight: bold; }
+    #transcript p { margin: 8px 0; padding: 8px 12px; background: #1a1a1a; border-left: 3px solid #4a4; border-radius: 2px; }
+    #transcript p.pending { border-left-color: #aa4; color: #aaa; font-style: italic; }
   </style>
 </head>
 <body>
-  <h1>JEDI — Avatar Live (whisper.cpp + n8n + TTS)</h1>
-
-  <div id="avatar-stage">
-    <img id="avatar" src="/avatar/idle.png" alt="JEDI Avatar">
-  </div>
-
-  <div id="controls">
-    <button id="btn">Starten</button>
-    <label class="toggle"><input type="checkbox" id="tts-toggle" checked> TTS / Sprachausgabe</label>
-  </div>
-
+  <h1>STT Live — whisper.cpp / Vulkan</h1>
+  <button id="btn">Starten</button>
   <div id="status">Bereit</div>
   <div id="meter"><div id="meter-bar"></div></div>
   <div id="transcript"></div>
 
   <script>
     const STT_URL    = '/transcribe';
-    const N8N_URL    = 'http://192.168.2.185:5678/webhook/stt';  // n8n LLM-Pipeline -> Antwort-Text
-    // Optionaler TTS-Service: POST { text } -> audio/wav. Leer = Browser-SpeechSynthesis.
-    const TTS_URL    = '';
-    const TTS_LANG   = 'de-DE';
+    // const N8N_URL    = 'http://192.168.2.185:5678/webhook-test/stt';  // n8n LLM-Pipeline
+    const N8N_URL    = 'http://192.168.2.185:5678/webhook/stt';  // n8n LLM-Pipeline
     const THRESHOLD  = 0.015;  // RMS Lautstärke-Schwelle
     const SILENCE_MS = 1200;   // Stille -> Aufnahme stoppen
 
-    const btn        = document.getElementById('btn');
-    const ttsToggle  = document.getElementById('tts-toggle');
-    const statusEl   = document.getElementById('status');
-    const meterBar   = document.getElementById('meter-bar');
+    const btn       = document.getElementById('btn');
+    const status    = document.getElementById('status');
+    const meterBar  = document.getElementById('meter-bar');
     const transcript = document.getElementById('transcript');
-    const avatar     = document.getElementById('avatar');
 
     let stream, audioCtx, analyser, mediaRecorder;
-    let active = false, recording = false, speaking = false;
+    let active = false, recording = false;
     let silenceTimer = null, chunks = [];
 
     btn.addEventListener('click', () => active ? stopListening() : startListening());
@@ -82,11 +51,10 @@
         active = true;
         btn.textContent = 'Stoppen';
         btn.classList.add('active');
-        statusEl.textContent = 'Hört zu...';
-        avatar.classList.add('listening');
+        status.textContent = 'Hört zu...';
         detectVoice();
       } catch (e) {
-        statusEl.textContent = 'Mikrofon-Fehler: ' + e.message;
+        status.textContent = 'Mikrofon-Fehler: ' + e.message;
       }
     }
 
@@ -98,8 +66,7 @@
       audioCtx?.close();
       btn.textContent = 'Starten';
       btn.classList.remove('active');
-      statusEl.textContent = 'Bereit';
-      avatar.classList.remove('listening');
+      status.textContent = 'Bereit';
       meterBar.style.width = '0';
     }
 
@@ -112,8 +79,7 @@
       meterBar.style.width = Math.min(rms / 0.1 * 100, 100) + '%';
       meterBar.style.background = rms > THRESHOLD ? '#a44' : '#4a4';
 
-      // Während der Avatar spricht nicht aufnehmen (sonst hört er sich selbst).
-      if (rms > THRESHOLD && !speaking) {
+      if (rms > THRESHOLD) {
         if (!recording) startRecording();
         clearTimeout(silenceTimer);
         silenceTimer = setTimeout(stopRecording, SILENCE_MS);
@@ -129,18 +95,18 @@
       mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
       mediaRecorder.onstop = sendAudio;
       mediaRecorder.start(100);
-      statusEl.textContent = 'Aufnahme läuft...';
+      status.textContent = 'Aufnahme läuft...';
     }
 
     function stopRecording() {
       if (!recording) return;
       recording = false;
       if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
-      statusEl.textContent = 'Verarbeite...';
+      status.textContent = 'Verarbeite...';
     }
 
     async function sendAudio() {
-      if (chunks.length === 0) { if (active) statusEl.textContent = 'Hört zu...'; return; }
+      if (chunks.length === 0) { if (active) status.textContent = 'Hört zu...'; return; }
 
       const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
       const pending = document.createElement('p');
@@ -157,111 +123,28 @@
         pending.className = '';
         pending.textContent = data.text || '(leer)';
 
-        // Text an n8n-Pipeline -> Antwort holen und sprechen.
-        if (data.text) askAndSpeak(data.text);
+        // Text an n8n-Pipeline weiterreichen (nur wenn nicht leer)
+        if (data.text) sendToN8n(data.text);
       } catch (e) {
         pending.textContent = 'Fehler: ' + e.message;
         pending.className = 'pending';
       }
 
-      if (active && !speaking) statusEl.textContent = 'Hört zu...';
+      if (active) status.textContent = 'Hört zu...';
     }
 
-    async function askAndSpeak(text) {
-      statusEl.textContent = 'Denke nach...';
-      let answer = '';
+    async function sendToN8n(text) {
+      // STT-Ergebnis steht schon im UI; n8n-Call ist eigener try damit
+      // ein Webhook-Fehler die Transkription nicht überschreibt.
       try {
-        const res = await fetch(N8N_URL, {
+        await fetch(N8N_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text })
         });
-        answer = parseAnswer(await res.text());
       } catch (e) {
         console.error('n8n-Webhook fehlgeschlagen:', e);
-        if (active) statusEl.textContent = 'Hört zu...';
-        return;
       }
-
-      if (!answer) { if (active) statusEl.textContent = 'Hört zu...'; return; }
-
-      const line = document.createElement('p');
-      line.className = 'bot';
-      line.textContent = answer;
-      transcript.prepend(line);
-
-      if (ttsToggle.checked) await speak(answer);
-      if (active) statusEl.textContent = 'Hört zu...';
-    }
-
-    // n8n "Respond to Webhook" kann Text oder JSON liefern -> robust parsen.
-    function parseAnswer(raw) {
-      const trimmed = (raw || '').trim();
-      if (!trimmed) return '';
-      try {
-        const json = JSON.parse(trimmed);
-        return (json.output || json.text || json.answer || json.response || trimmed).toString().trim();
-      } catch {
-        return trimmed;
-      }
-    }
-
-    async function speak(text) {
-      speaking = true;
-      statusEl.textContent = 'Spricht...';
-      avatar.classList.remove('listening');
-      avatar.classList.add('speaking');
-      avatar.src = '/avatar/talking-loop.gif';
-      try {
-        if (TTS_URL) {
-          await speakViaService(text);
-        } else {
-          await speakViaBrowser(text);
-        }
-      } catch (e) {
-        console.error('TTS fehlgeschlagen:', e);
-      } finally {
-        speaking = false;
-        avatar.classList.remove('speaking');
-        avatar.src = '/avatar/idle.png';
-        if (active) avatar.classList.add('listening');
-      }
-    }
-
-    async function speakViaService(text) {
-      const res = await fetch(TTS_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text })
-      });
-      if (!res.ok) throw new Error('TTS-Service ' + res.status);
-      const audioBlob = await res.blob();
-      const url = URL.createObjectURL(audioBlob);
-      const audio = new Audio(url);
-      try {
-        await new Promise((resolve, reject) => {
-          audio.onended = resolve;
-          audio.onerror = () => reject(new Error('Audio-Wiedergabe fehlgeschlagen'));
-          audio.play().catch(reject);
-        });
-      } finally {
-        URL.revokeObjectURL(url);
-      }
-    }
-
-    function speakViaBrowser(text) {
-      if (!('speechSynthesis' in window)) return Promise.resolve();
-      return new Promise(resolve => {
-        window.speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(text);
-        u.lang = TTS_LANG;
-        u.rate = 0.96;
-        u.pitch = 1.03;
-        const fallback = setTimeout(resolve, Math.min(15000, Math.max(2500, text.length * 60)));
-        u.onend = () => { clearTimeout(fallback); resolve(); };
-        u.onerror = () => { clearTimeout(fallback); resolve(); };
-        window.speechSynthesis.speak(u);
-      });
     }
   </script>
 </body>
