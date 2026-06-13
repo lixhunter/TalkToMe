@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Build-Deps + Runtime: Vulkan loader, RADV-Treiber (AMD), glslc (Shader-Compiler), ffmpeg, python
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake git ca-certificates \
+    build-essential cmake git ca-certificates curl \
     libvulkan-dev vulkan-tools mesa-vulkan-drivers \
     glslc glslang-tools spirv-headers spirv-tools \
     ffmpeg python3 python3-pip \

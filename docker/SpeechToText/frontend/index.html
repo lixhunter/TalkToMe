@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>STT Live</title>
+  <style>
+    body { font-family: monospace; max-width: 700px; margin: 40px auto; padding: 0 20px; background: #111; color: #eee; }
+    h1 { font-size: 1.2rem; color: #aaa; }
+    #btn { padding: 12px 28px; font-size: 1rem; cursor: pointer; border: 1px solid #555; background: #222; color: #eee; border-radius: 4px; }
+    #btn.active { border-color: #e44; color: #e44; }
+    #status { margin: 16px 0 8px; color: #888; font-size: 0.85rem; }
+    #meter { width: 100%; height: 6px; background: #333; border-radius: 3px; margin-bottom: 20px; }
+    #meter-bar { height: 100%; width: 0; background: #4a4; border-radius: 3px; transition: width 0.05s; }
+    #transcript { border-top: 1px solid #333; padding-top: 16px; }
+    #transcript p { margin: 8px 0; padding: 8px 12px; background: #1a1a1a; border-left: 3px solid #4a4; border-radius: 2px; }
+    #transcript p.pending { border-left-color: #aa4; color: #aaa; font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>STT Live — whisper.cpp / Vulkan</h1>
+  <button id="btn">Starten</button>
+  <div id="status">Bereit</div>
+  <div id="meter"><div id="meter-bar"></div></div>
+  <div id="transcript"></div>
+
+  <script>
+    const STT_URL    = '/transcribe';
+    const N8N_URL    = 'http://192.168.2.185:5678/webhook-test/stt';  // n8n LLM-Pipeline
+    const THRESHOLD  = 0.015;  // RMS Lautstärke-Schwelle
+    const SILENCE_MS = 1200;   // Stille -> Aufnahme stoppen
+
+    const btn       = document.getElementById('btn');
+    const status    = document.getElementById('status');
+    const meterBar  = document.getElementById('meter-bar');
+    const transcript = document.getElementById('transcript');
+
+    let stream, audioCtx, analyser, mediaRecorder;
+    let active = false, recording = false;
+    let silenceTimer = null, chunks = [];
+
+    btn.addEventListener('click', () => active ? stopListening() : startListening());
+
+    async function startListening() {
+      try {
+        stream   = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioCtx = new AudioContext();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        audioCtx.createMediaStreamSource(stream).connect(analyser);
+        active = true;
+        btn.textContent = 'Stoppen';
+        btn.classList.add('active');
+        status.textContent = 'Hört zu...';
+        detectVoice();
+      } catch (e) {
+        status.textContent = 'Mikrofon-Fehler: ' + e.message;
+      }
+    }
+
+    function stopListening() {
+      active = false;
+      clearTimeout(silenceTimer);
+      if (recording && mediaRecorder?.state === 'recording') mediaRecorder.stop();
+      stream?.getTracks().forEach(t => t.stop());
+      audioCtx?.close();
+      btn.textContent = 'Starten';
+      btn.classList.remove('active');
+      status.textContent = 'Bereit';
+      meterBar.style.width = '0';
+    }
+
+    function detectVoice() {
+      if (!active) return;
+      const data = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(data);
+      const rms = Math.sqrt(data.reduce((s, v) => s + v * v, 0) / data.length);
+
+      meterBar.style.width = Math.min(rms / 0.1 * 100, 100) + '%';
+      meterBar.style.background = rms > THRESHOLD ? '#a44' : '#4a4';
+
+      if (rms > THRESHOLD) {
+        if (!recording) startRecording();
+        clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(stopRecording, SILENCE_MS);
+      }
+
+      requestAnimationFrame(detectVoice);
+    }
+
+    function startRecording() {
+      recording = true;
+      chunks = [];
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+      mediaRecorder.onstop = sendAudio;
+      mediaRecorder.start(100);
+      status.textContent = 'Aufnahme läuft...';
+    }
+
+    function stopRecording() {
+      if (!recording) return;
+      recording = false;
+      if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
+      status.textContent = 'Verarbeite...';
+    }
+
+    async function sendAudio() {
+      if (chunks.length === 0) { if (active) status.textContent = 'Hört zu...'; return; }
+
+      const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+      const pending = document.createElement('p');
+      pending.className = 'pending';
+      pending.textContent = '...';
+      transcript.prepend(pending);
+
+      const form = new FormData();
+      form.append('audio', blob, 'audio.webm');
+
+      try {
+        const res  = await fetch(STT_URL, { method: 'POST', body: form });
+        const data = await res.json();
+        pending.className = '';
+        pending.textContent = data.text || '(leer)';
+
+        // Text an n8n-Pipeline weiterreichen (nur wenn nicht leer)
+        if (data.text) sendToN8n(data.text);
+      } catch (e) {
+        pending.textContent = 'Fehler: ' + e.message;
+        pending.className = 'pending';
+      }
+
+      if (active) status.textContent = 'Hört zu...';
+    }
+
+    async function sendToN8n(text) {
+      // STT-Ergebnis steht schon im UI; n8n-Call ist eigener try damit
+      // ein Webhook-Fehler die Transkription nicht überschreibt.
+      try {
+        await fetch(N8N_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text })
+        });
+      } catch (e) {
+        console.error('n8n-Webhook fehlgeschlagen:', e);
+      }
+    }
+  </script>
+</body>
+</html>
